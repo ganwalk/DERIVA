@@ -1,6 +1,6 @@
 # Deriva
 
-Um jogo 3D num deserto procedural e infinito que se refaz enquanto você atravessa. Você começa numa ilha flutuante bem acima das montanhas, pula, mergulha e segue correndo, deslizando, planando e se pendurando em olhos que flutuam no céu. Referências: Journey (movimento e cachecol) e Hylics (cor e estranheza).
+Um jogo 3D numa terra procedural e infinita que se refaz enquanto você atravessa, passando por desertos, savanas, matas, estepes, taiga, tundra e neve. Você começa numa ilha flutuante bem acima das montanhas, pula, mergulha e segue correndo, deslizando, planando e se pendurando em olhos que flutuam no céu. Referências: Journey (movimento e cachecol) e Hylics (estranheza). As cores são as da Terra; o surreal fica por conta das formas.
 
 ## Rodando localmente
 
@@ -34,8 +34,10 @@ O projeto é um site estático feito com Vite. Na Vercel, importe o repositório
 Tudo vive em `src/main.js`, dividido em seções comentadas.
 
 - **Relevo**: ruído de valor com hash inteiro, então a física e a malha leem exatamente o mesmo chão. A malha é uma grade de 161 × 161 que acompanha o jogador e é refeita aos poucos, algumas linhas por quadro, num segundo buffer. De longe, o shader faz o relevo respirar e curvar como um planeta pequeno.
-- **Pontilhado**: porte do `dither.ts` do portfólio. Matriz de Bayer 4 × 4, luminância Rec. 601, cor original acima do limiar e preto abaixo, com as mesmas quatro fases a cada 175 ms. A cena é renderizada em baixa resolução e o retículo vai por cima.
+- **Pontilhado**: baseado no `dither.ts` do portfólio. Matriz de Bayer 4 × 4 no pixel da tela, luminância Rec. 601, com as mesmas quatro fases a cada 175 ms. Mais suave que o original: o limiar só alcança os tons baixos (`uSpread`) e abaixo dele a cor escurece (`uShade`) em vez de virar preto.
+- **Biomas**: dois campos lentos de clima, temperatura e umidade, escolhem a cor do chão como na Terra (deserto, savana, mata, estepe, campo, floresta, tundra, taiga, neve). A altitude esfria, as encostas viram rocha e os picos recebem neve. O céu segue o clima do lugar onde você está.
 - **Interface**: desenhada num canvas que entra no shader antes do retículo, então texto, painel, mira e mão também viram pontos. O HTML continua na página, invisível, para leitor de tela e teclado.
+- **Cachecol**: corrente de Verlet que colide com a túnica e o capuz, então não atravessa o corpo.
 - **Física**: passos fixos (4 por quadro). A gravidade da encosta acelera quem desliza, a aterrissagem projeta a velocidade no plano do chão, e a corda é um pêndulo que também puxa.
 
 ## Onde mexer
@@ -43,12 +45,14 @@ Tudo vive em `src/main.js`, dividido em seções comentadas.
 | Quero mudar | Procuro em `src/main.js` |
 | --- | --- |
 | Forma do relevo | `function height` |
-| Força do pontilhado | `uBias` no `postMat` |
+| Força do pontilhado | `uSpread`, `uShade` e `uBias` no `postMat` |
+| Cores dos biomas | `fragmentShader` do `terrMat` |
+| Tamanho dos biomas | `function climateAt` (e a cópia no shader do relevo) |
 | Gravidade | `const G` |
 | Força da corda | `const pull` dentro de `step` |
 | Altura da ilha | `ISL.top = peak + 330` |
 | Textos do menu | `const TXT` (e a cópia em `index.html`) |
-| Cores do céu | `function updateAtmos` |
+| Cores do céu | `SKY_TOP` e `SKY_HOR` |
 
 O three.js está fixado na versão 0.128.0 de propósito: versões a partir da r152 mudam o gerenciamento de cor e a intensidade das luzes, o que alteraria o visual.
 
