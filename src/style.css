@@ -1,0 +1,32 @@
+:root {
+  --ink: #000;
+  --paper: #fff;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* O jogo é preto e branco nos dois temas, de propósito: a cor é do mundo, não da interface. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --ink: #000; --paper: #fff; }
+}
+:root[data-theme="dark"] { --ink: #000; --paper: #fff; }
+*, *::before, *::after { box-sizing: inherit; }
+html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--ink); color: var(--paper); }
+/* A mão é desenhada dentro do canvas, junto com a interface, para passar pelo pontilhado. */
+html, body, canvas, button { cursor: none; }
+body { font: 15px/1.5 Archivo, "Helvetica Neue", Arial, sans-serif; }
+canvas#c {
+  position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  image-rendering: pixelated; touch-action: none;
+}
+/* Todo o texto visível é pintado no canvas; esta cópia em HTML existe para leitor de tela e teclado. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+#start {
+  position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0;
+  border: 0; padding: 0; margin: 0; background: transparent; color: transparent;
+}
+#start[hidden] { display: none; }

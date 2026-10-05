@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deriva</title>
+<meta name="description" content="Um jogo 3D num deserto procedural que se refaz enquanto você atravessa. Corra, se pendure, plane e derrube as bocas que tentam te frear.">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&display=swap" rel="stylesheet">
+</head>
+<body>
+<canvas id="c" aria-label="Mundo do jogo Deriva"></canvas>
+
+<div id="panel" class="sr-only" role="dialog" aria-labelledby="title">
+  <h1 id="title">Deriva</h1>
+  <p>Uma ilha solta no céu, e embaixo um deserto sem fim que se refaz enquanto você atravessa. Corra pelas dunas, se pendure nos olhos que flutuam no céu e derrube as bocas que tentam te frear. Cada boca que cai te deixa mais rápido.</p>
+  <p id="status"></p>
+  <dl>
+    <dt>Mouse</dt><dd>Mira. Leve o ponteiro para os lados para virar a câmera.</dd>
+    <dt>W A S D</dt><dd>Andar</dd>
+    <dt>Espaço</dt><dd>Saltar. Segure no chão para um salto longo.</dd>
+    <dt>Espaço no ar</dt><dd>Planar enquanto segurar</dd>
+    <dt>Shift</dt><dd>Deslizar no chão e mergulhar no ar</dd>
+    <dt>Botão esquerdo</dt><dd>Segure sobre um olho ou sobre o chão. A corda te puxa até lá.</dd>
+    <dt>Botão direito ou F</dt><dd>Golpeia a boca sob o ponteiro. Sem alvo, dá um impulso.</dd>
+    <dt>B</dt><dd>Liga e desliga o pontilhado</dd>
+    <dt>Esc</dt><dd>Pausa</dd>
+  </dl>
+  <p>Segure Shift ao cair e a queda vira velocidade quando você tocar o chão. Os aros dourados também aceleram.</p>
+  <p id="best"></p>
+</div>
+<button id="start" type="button">Começar</button>
+<div id="toast" class="sr-only" role="status"></div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
