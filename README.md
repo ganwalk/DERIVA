@@ -40,7 +40,7 @@ Tudo vive em `src/main.js`, dividido em seções comentadas.
 - **Interface**: desenhada num canvas que entra no shader antes do retículo, então texto, painel, mira e mão também viram pontos. O HTML continua na página, invisível, para leitor de tela e teclado.
 - **Cachecol**: corrente de Verlet que colide com a túnica e o capuz, então não atravessa o corpo.
 - **Trilha**: um eixo que sai da ilha e serpenteia (`courseC`). A velocidade só pode abrir até `MAXANG` da direção da trilha (`keepForward`); andar de ré é cortado, e a partir de `CORR_IN` metros do centro o lado de fora se fecha até empurrar de volta em `CORR_OUT`.
-- **A Boca**: vem pela trilha atrás de você, de 17 a 58 m/s ao longo do tempo, e acelera se você abrir mais de 200 m. Distância zero, game over. Recomeçar recarrega a página e entra direto no jogo.
+- **A Boca**: vem pela trilha atrás de você, de 17 a 58 m/s ao longo do tempo, e acelera se você abrir mais de 200 m. Quando ela chega perto, a câmera sobe e recua por cima dela, para a Boca aparecer em primeiro plano com você à frente. Distância zero, game over. Recomeçar recarrega a página e entra direto no jogo.
 - **Física**: passos fixos (4 por quadro). A gravidade da encosta acelera quem desliza, a aterrissagem projeta a velocidade no plano do chão, e a corda é um pêndulo que também puxa.
 
 ## Onde mexer

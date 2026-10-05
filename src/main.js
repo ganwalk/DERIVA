@@ -1325,7 +1325,8 @@ function updateIntro(dt, t) {
     pu.position.copy(e.position).addScaledVector(tv, 0.75);
   }
 }
-const focus = new THREE.Vector3(); let focusInit = false;
+const focus = new THREE.Vector3(); let focusInit = false, camDist = 46;
+const chaseRise = () => CH.on ? smooth(115, 80, CH.gap) + smooth(40, 12, CH.gap) * 0.6 : 0;
 function updateCamera(dt, t) {
   const sp = P.v.length(), hs = Math.hypot(P.v.x, P.v.z);
   const live = state === 'play' || state === 'eaten';
@@ -1341,10 +1342,10 @@ function updateCamera(dt, t) {
     if (state === 'eaten') target += Math.PI * smooth(0, 0.45, eatenT);
     let dy = target - camYaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
     camYaw += dy * (1 - Math.exp(-3 * dt));
-    if (mouse.inside) {
-      const ny = mouse.y / H * 2 - 1;
+    {
+      const ny = mouse.inside ? mouse.y / H * 2 - 1 : 0;
       const fallBias = intro === 'fall' ? 0.55 : 0;
-      camPitch = lerp(camPitch, clamp(0.26 + ny * 0.36 + fallBias, -0.2, 1.1), 1 - Math.exp(-3 * dt));
+      camPitch = lerp(camPitch, clamp(0.26 + ny * 0.36 + fallBias + chaseRise() * 0.55, -0.2, 1.1), 1 - Math.exp(-3 * dt));
       lookUp = lerp(lookUp, fallBias ? 0 : Math.pow(clamp(-ny, 0, 1), 1.3) * 16, 1 - Math.exp(-3 * dt));
     }
   } else {
@@ -1354,7 +1355,13 @@ function updateCamera(dt, t) {
   }
   if (!focusInit) { focus.copy(P.p); focusInit = true; }
   focus.lerp(P.p, 1 - Math.exp(-14 * dt));
-  const dist = live ? Math.min(27, 11 + sp * 0.07) : (intro === 'island' ? 46 : 22);
+  let dist = live ? Math.min(27, 11 + sp * 0.07) : (intro === 'island' ? 46 : 22);
+  // Com a Boca perto, a câmera sobe primeiro e depois recua por cima dela,
+  // até ficar atrás e acima, com a Boca na parte de baixo do quadro e o
+  // viajante à frente. Subir antes evita atravessar a Boca no caminho.
+  if (live && CH.on) dist = lerp(dist, Math.max(dist, CH.gap + 32), smooth(85, 45, CH.gap));
+  camDist = lerp(camDist, dist, 1 - Math.exp(-4 * dt));
+  dist = camDist;
   const cp = Math.cos(camPitch);
   camera.position.set(focus.x + Math.sin(camYaw) * cp * dist, focus.y + 2.4 + Math.sin(camPitch) * dist, focus.z + Math.cos(camYaw) * cp * dist);
   const gh = groundH(camera.position.x, camera.position.z, camera.position.y + 2) + 1.6;
