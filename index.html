@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Deriva</title>
-<meta name="description" content="Um jogo 3D numa terra procedural que se refaz enquanto você atravessa. Corra, se pendure, plane e derrube as bocas que tentam te frear.">
+<meta name="description" content="Um jogo 3D numa terra procedural que se refaz enquanto você atravessa. Só se vai para a frente, e uma boca enorme vem atrás: mantenha a velocidade ou seja engolido.">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,11 +16,12 @@
 
 <div id="panel" class="sr-only" role="dialog" aria-labelledby="title">
   <h1 id="title">Deriva</h1>
-  <p>Uma ilha solta no céu, e embaixo uma terra sem fim que se refaz enquanto você atravessa: dunas, savanas, matas, estepes, tundra e neve. Corra pelas encostas, se pendure nos olhos que flutuam no céu e derrube as bocas que tentam te frear. Cada boca que cai te deixa mais rápido.</p>
+  <p>Uma ilha solta no céu, e embaixo uma terra sem fim que se refaz enquanto você atravessa: dunas, savanas, matas, estepes, tundra e neve. Daqui só se vai para a frente, e uma boca enorme vem atrás, cada vez mais rápida. Não perca velocidade: deslize nas descidas, se pendure nos olhos do céu, passe pelos aros e derrube as bocas menores que tentam te frear. Se ela te alcançar, te engole.</p>
   <p id="status"></p>
   <dl>
-    <dt>Mouse</dt><dd>Mira. Leve o ponteiro para os lados para virar a câmera.</dd>
-    <dt>W A S D</dt><dd>Andar</dd>
+    <dt>Mouse</dt><dd>Mira. A câmera olha um pouco para o lado do ponteiro.</dd>
+    <dt>A D</dt><dd>Desviar. Você corre sozinho e nunca volta.</dd>
+    <dt>W</dt><dd>Andar na ilha, antes do salto</dd>
     <dt>Espaço</dt><dd>Saltar. Segure no chão para um salto longo.</dd>
     <dt>Espaço no ar</dt><dd>Planar enquanto segurar</dd>
     <dt>Shift</dt><dd>Deslizar no chão e mergulhar no ar</dd>
@@ -29,7 +30,7 @@
     <dt>B</dt><dd>Liga e desliga o pontilhado</dd>
     <dt>Esc</dt><dd>Pausa</dd>
   </dl>
-  <p>Segure Shift ao cair e a queda vira velocidade quando você tocar o chão. Os aros dourados também aceleram.</p>
+  <p>Segure Shift ao cair e a queda vira velocidade quando você tocar o chão. Os aros dourados e cada boca derrubada também aceleram.</p>
   <p id="best"></p>
 </div>
 <button id="start" type="button">Começar</button>
