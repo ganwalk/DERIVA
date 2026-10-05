@@ -368,6 +368,40 @@ const ISL = { x: 0, z: 0, top: 0, R: 18 };
   ISL.top = peak + 330;
   P.p.set(ISL.x - fx * 9, ISL.top, ISL.z - fz * 9);
 }
+// Trilha: o mundo só tem frente. Um eixo que sai da ilha e serpenteia devagar;
+// o viajante pode abrir até MAXANG para os lados, nunca voltar, e quanto mais
+// se afasta do centro, mais o lado de fora se fecha até empurrar de volta.
+const CF = { x: -Math.sin(spawnYaw), z: -Math.cos(spawnYaw) }, CR = { x: Math.cos(spawnYaw), z: -Math.sin(spawnYaw) };
+const courseC = (u) => 260 * Math.sin(u * 0.0008) + 120 * Math.sin(u * 0.0021);
+const courseD = (u) => 0.208 * Math.cos(u * 0.0008) + 0.252 * Math.cos(u * 0.0021);
+const courseU = (x, z) => (x - ISL.x) * CF.x + (z - ISL.z) * CF.z;
+function courseFrame(x, z, out) {
+  const u = courseU(x, z), w = (x - ISL.x) * CR.x + (z - ISL.z) * CR.z, d = courseD(u), l = Math.hypot(1, d);
+  out.u = u; out.off = w - courseC(u);
+  out.fx = (CF.x + CR.x * d) / l; out.fz = (CF.z + CR.z * d) / l;
+  out.rx = (CR.x - CF.x * d) / l; out.rz = (CR.z - CF.z * d) / l;
+  return out;
+}
+function coursePoint(u, off, out) {
+  const w = courseC(u) + off;
+  out.x = ISL.x + CF.x * u + CR.x * w; out.z = ISL.z + CF.z * u + CR.z * w;
+  return out;
+}
+const U0 = courseU(P.p.x, P.p.z), MAXANG = 1.0, CORR_IN = 100, CORR_OUT = 220;
+const cfStep = {}, cfCam = {}, cfHud = {};
+// Corta a velocidade que sai do cone: a direção vai para a borda e o módulo
+// cai com o cosseno do excesso (andar de ré vira zero, não velocidade de graça).
+function keepForward(v, cf) {
+  const hs = Math.hypot(v.x, v.z); if (hs < 0.01) return;
+  const a = Math.atan2(v.x * cf.rx + v.z * cf.rz, v.x * cf.fx + v.z * cf.fz);
+  const limOut = MAXANG - (MAXANG + 0.35) * smooth(CORR_IN, CORR_OUT, Math.abs(cf.off));
+  const lo = cf.off < 0 ? -limOut : -MAXANG, hi = cf.off > 0 ? limOut : MAXANG;
+  const b = clamp(a, lo, hi);
+  if (b === a) return;
+  const m = hs * Math.max(0, Math.cos(a - b)), c = Math.cos(b), sn = Math.sin(b);
+  v.x = (cf.fx * c + cf.rx * sn) * m; v.z = (cf.fz * c + cf.rz * sn) * m;
+}
+const isAhead = (x, z, slack) => courseU(x, z) > courseU(P.p.x, P.p.z) - slack;
 function onIsland(x, z, y) { const dx = x - ISL.x, dz = z - ISL.z; return dx * dx + dz * dz < ISL.R * ISL.R && y > ISL.top - 3; }
 function groundH(x, z, y) { return onIsland(x, z, y) ? Math.max(ISL.top, height(x, z)) : height(x, z); }
 function groundN(x, z, y, out) { return onIsland(x, z, y) ? out.set(0, 1, 0) : normalAt(x, z, out); }
@@ -749,6 +783,89 @@ function updateEnemies(dt, t) {
 }
 
 // ---------------------------------------------------------------------------
+// A Boca: vem pela trilha atrás do viajante, cada vez mais rápida. Se a
+// distância chega a zero, engole. Longe demais, ela apressa o passo.
+// ---------------------------------------------------------------------------
+const CH = { on: false, u: 0, off: 0, sp: 0, t: 0, gap: 999, pos: new THREE.Vector3(), g: new THREE.Group() };
+const CH_START = 130, CH_EAT = 12;
+{
+  const flesh = toon(0x6e4b3c);
+  CH.flesh = flesh;
+  const b = new THREE.Mesh(new THREE.SphereGeometry(16, 28, 20), flesh); b.scale.set(1.15, 0.95, 1);
+  CH.mouth = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), blackMat); CH.mouth.position.set(0, -2, 12.5); CH.mouth.scale.set(12, 7, 5.5);
+  const gum = new THREE.Mesh(new THREE.TorusGeometry(1, 0.09, 8, 40), toon(0x8e4a48)); gum.scale.set(12.3, 7.3, 6); gum.position.copy(CH.mouth.position);
+  CH.gum = gum;
+  const toothM = toon(0xe9e2cf);
+  CH.teeth = [];
+  for (let k = 0; k < 18; k++) {
+    const a = k / 18 * Math.PI * 2;
+    const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.6, 5), toothM);
+    tooth.userData.a = a;
+    CH.teeth.push(tooth); CH.g.add(tooth);
+  }
+  const eyeW = toon(0xf2eee6);
+  for (const sx of [-1, 1]) {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12), eyeW); e.position.set(sx * 7.5, 9, 9.5);
+    const pu = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8), blackMat); pu.position.set(sx * 7.5, 9, 12.4);
+    CH.g.add(e, pu);
+  }
+  CH.g.add(b, CH.mouth, gum);
+  CH.g.visible = false;
+  scene.add(CH.g);
+}
+function placeTeeth(open) {
+  for (const tooth of CH.teeth) {
+    const a = tooth.userData.a, up = Math.sin(a) > 0;
+    tooth.position.set(Math.cos(a) * 11, -2 + Math.sin(a) * 6.3 * open, 13.6);
+    tooth.rotation.set(0, 0, up ? Math.PI : 0);
+  }
+  CH.mouth.scale.y = 7 * open; CH.gum.scale.y = 7.3 * open;
+}
+function updateChaser(dt, t) {
+  const cf = courseFrame(P.p.x, P.p.z, cfHud);
+  if (state === 'play' && intro === 'done') {
+    if (!CH.on) { CH.on = true; CH.u = cf.u - CH_START; CH.off = cf.off; CH.t = 0; }
+    CH.t += dt;
+    const gap = cf.u - CH.u;
+    CH.sp = Math.min(58, 17 + CH.t * 0.15) + Math.max(0, gap - 200) * 0.3;
+    CH.u += CH.sp * dt;
+    CH.off = lerp(CH.off, cf.off, 1 - Math.exp(-1.5 * dt));
+    if (cf.u - CH.u < CH_EAT) swallow();
+  } else if (state === 'eaten') {
+    CH.u = lerp(CH.u, cf.u + 2, 1 - Math.exp(-6 * dt));
+    CH.off = lerp(CH.off, cf.off, 1 - Math.exp(-6 * dt));
+  }
+  CH.gap = CH.on ? cf.u - CH.u : 999;
+  CH.g.visible = CH.on && CH.gap < 700;
+  if (!CH.g.visible) return;
+  coursePoint(CH.u, CH.off, CH.pos);
+  const gy = height(CH.pos.x, CH.pos.z) + farOffset(CH.pos.x, CH.pos.z, t, P.p.x, P.p.z) + 15;
+  CH.pos.y = lerp(gy, Math.max(gy - 8, P.p.y + 1), smooth(160, 30, CH.gap)) + Math.sin(t * 1.3) * 1.5;
+  CH.g.position.copy(CH.pos);
+  CH.g.lookAt(P.p.x, P.p.y + 1.4, P.p.z);
+  const near = smooth(120, 20, CH.gap);
+  placeTeeth(state === 'eaten' ? Math.max(0.05, 1 - eatenT * 1.6) : 0.55 + 0.45 * Math.abs(Math.sin(t * (2 + near * 5))));
+  if (state === 'play') shake = Math.max(shake, near * 0.18);
+}
+let eatenT = 0;
+function swallow() {
+  if (state !== 'play') return;
+  state = 'eaten'; eatenT = 0;
+  releaseRope(); P.dash = null;
+  shake += 0.8; hitstop = 0;
+  saveBest();
+}
+function finishSwallow() {
+  state = 'dead';
+  showBest();
+  setStatus(`A boca te alcançou a ${fmt(P.dist)} m.`);
+  btnLabel = 'Recomeçar'; startBtn.textContent = btnLabel;
+  $('panel').hidden = false; startBtn.hidden = false;
+  setAim('repouso');
+  startBtn.focus({ preventScroll: true });
+}
+
+// ---------------------------------------------------------------------------
 // Partículas
 // ---------------------------------------------------------------------------
 const PN = 700;
@@ -875,14 +992,14 @@ function pick() {
   let best = 1e9;
   for (const e of enemies) {
     if (!e.active || !e.alive || e.dying >= 0) continue;
-    if (e.pos.distanceTo(P.p) > 120) continue;
+    if (e.pos.distanceTo(P.p) > 120 || !isAhead(e.pos.x, e.pos.z, 8)) continue;
     const t = raySphere(ro, rd, e.pos.x, e.pos.y, e.pos.z, 6);
     if (t > 0 && t < best) { best = t; hover = { type: 'enemy', e }; }
   }
   if (hover) return;
   for (const o of visOrbs) {
     const dx = o.x - P.p.x, dy = o.y - P.p.y, dz = o.z - P.p.z;
-    if (dx * dx + dy * dy + dz * dz > 180 * 180) continue;
+    if (dx * dx + dy * dy + dz * dz > 180 * 180 || !isAhead(o.x, o.z, 4)) continue;
     const t = raySphere(ro, rd, o.x, o.y, o.z, 8);
     if (t > 0 && t < best) { best = t; hover = { type: 'orb', o }; }
   }
@@ -899,7 +1016,7 @@ function fireRope() {
     const t = rayTerrain(ro, rd, 320);
     if (t < 0) return;
     ax = ro.x + rd.x * t; ay = ro.y + rd.y * t; az = ro.z + rd.z * t;
-    if (Math.hypot(ax - P.p.x, ay - P.p.y, az - P.p.z) > 180) return;
+    if (Math.hypot(ax - P.p.x, ay - P.p.y, az - P.p.z) > 180 || !isAhead(ax, az, 4)) return;
   }
   P.rope = new THREE.Vector3(ax, ay, az);
   P.ropeL = Math.max(6, P.rope.distanceTo(P.p));
@@ -990,12 +1107,17 @@ function step(dt) {
   P.invuln = Math.max(0, P.invuln - dt);
   P.imp = Math.max(0, P.imp - dt * 2.2);
 
-  const inF = (K.KeyW || K.ArrowUp ? 1 : 0) - (K.KeyS || K.ArrowDown ? 1 : 0);
-  const inR = (K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0);
-  const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw), rx = Math.cos(camYaw), rz = -Math.sin(camYaw);
-  let dx = fx * inF + rx * inR, dz = fz * inF + rz * inR;
-  const dl = Math.hypot(dx, dz); const hasIn = dl > 0.01;
-  if (hasIn) { dx /= dl; dz /= dl; }
+  // Fora da ilha o viajante corre sozinho: A e D só desviam a direção dentro
+  // do cone da trilha. Na ilha, W anda.
+  const auto = intro !== 'island';
+  const inR = (K.KeyD || K.ArrowRight ? 1 : 0) - (K.KeyA || K.ArrowLeft ? 1 : 0);
+  const inF = auto || K.KeyW || K.ArrowUp ? 1 : 0;
+  const cf = courseFrame(p.x, p.z, cfStep);
+  const fx = cf.fx, fz = cf.fz;
+  // sem A nem D, volta devagar para o meio da trilha
+  const sa = inR ? inR * MAXANG * 0.85 : -clamp(cf.off / 300, -0.3, 0.3), ca = Math.cos(sa), sna = Math.sin(sa);
+  const dx = cf.fx * ca + cf.rx * sna, dz = cf.fz * ca + cf.rz * sna;
+  const hasIn = inF > 0 || inR !== 0;
   const shift = K.ShiftLeft || K.ShiftRight;
   const runSpeed = 20 + P.imp * 0.3;
 
@@ -1132,6 +1254,7 @@ function step(dt) {
   } else if (P.grounded && p.y > h + 0.05) {
     P.grounded = false;
   }
+  keepForward(v, courseFrame(p.x, p.z, cfStep));
 }
 
 function checkContacts(t) {
@@ -1205,17 +1328,25 @@ function updateIntro(dt, t) {
 const focus = new THREE.Vector3(); let focusInit = false;
 function updateCamera(dt, t) {
   const sp = P.v.length(), hs = Math.hypot(P.v.x, P.v.z);
-  if (state === 'play') {
+  const live = state === 'play' || state === 'eaten';
+  if (live) {
+    // A câmera fica atrás do viajante, entre a direção da trilha e a da
+    // corrida; o ponteiro só a desvia um pouco para olhar de lado.
+    const cf = courseFrame(P.p.x, P.p.z, cfCam);
+    const cy = Math.atan2(-cf.fx, -cf.fz);
+    let target = cy;
+    if (hs > 4) { let dv = Math.atan2(-P.v.x, -P.v.z) - cy; while (dv > Math.PI) dv -= Math.PI * 2; while (dv < -Math.PI) dv += Math.PI * 2; target += dv * 0.6; }
+    if (mouse.inside) target -= (mouse.x / W * 2 - 1) * 0.45;
+    // engolido: a câmera vira para trás e encara a boca
+    if (state === 'eaten') target += Math.PI * smooth(0, 0.45, eatenT);
+    let dy = target - camYaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
+    camYaw += dy * (1 - Math.exp(-3 * dt));
     if (mouse.inside) {
-      const nx = mouse.x / W * 2 - 1, a = Math.abs(nx), dz = 0.12;
-      if (a > dz) camYaw -= Math.sign(nx) * Math.pow((a - dz) / (1 - dz), 1.5) * 2.7 * dt;
       const ny = mouse.y / H * 2 - 1;
       const fallBias = intro === 'fall' ? 0.55 : 0;
       camPitch = lerp(camPitch, clamp(0.26 + ny * 0.36 + fallBias, -0.2, 1.1), 1 - Math.exp(-3 * dt));
       lookUp = lerp(lookUp, fallBias ? 0 : Math.pow(clamp(-ny, 0, 1), 1.3) * 16, 1 - Math.exp(-3 * dt));
     }
-    if (K.ArrowLeft) camYaw += 2.2 * dt;
-    if (K.ArrowRight) camYaw -= 2.2 * dt;
   } else {
     camYaw += dt * 0.08;
     camPitch = lerp(camPitch, intro === 'island' ? 0.42 : 0.2, 1 - Math.exp(-2 * dt));
@@ -1223,7 +1354,7 @@ function updateCamera(dt, t) {
   }
   if (!focusInit) { focus.copy(P.p); focusInit = true; }
   focus.lerp(P.p, 1 - Math.exp(-14 * dt));
-  const dist = state === 'play' ? Math.min(27, 11 + sp * 0.07) : (intro === 'island' ? 46 : 22);
+  const dist = live ? Math.min(27, 11 + sp * 0.07) : (intro === 'island' ? 46 : 22);
   const cp = Math.cos(camPitch);
   camera.position.set(focus.x + Math.sin(camYaw) * cp * dist, focus.y + 2.4 + Math.sin(camPitch) * dist, focus.z + Math.cos(camYaw) * cp * dist);
   const gh = groundH(camera.position.x, camera.position.z, camera.position.y + 2) + 1.6;
@@ -1234,7 +1365,7 @@ function updateCamera(dt, t) {
   }
   shake = Math.max(0, shake - dt * 2.5);
   const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw);
-  if (state === 'play' || W < 900) camera.lookAt(focus.x + fx * lookUp * 0.8, focus.y + 2.4 + lookUp, focus.z + fz * lookUp * 0.8);
+  if (live || W < 900) camera.lookAt(focus.x + fx * lookUp * 0.8, focus.y + 2.4 + lookUp, focus.z + fz * lookUp * 0.8);
   else camera.lookAt(focus.x - Math.cos(camYaw) * 7, focus.y + 2.2, focus.z + Math.sin(camYaw) * 7);
   fovKick = Math.max(0, fovKick - dt * 18);
   const fov = 68 + Math.min(sp, 180) * 0.13 + (reduceMotion ? 0 : fovKick);
@@ -1442,10 +1573,11 @@ if (document.fonts) {
     .map((f) => document.fonts.load(f).catch(() => null))).then(() => { uiDirty = true; signJump.userData.draw(); signShift.userData.draw(); });
 }
 const TXT = {
-  lead: 'Uma ilha solta no céu, e embaixo uma terra sem fim que se refaz enquanto você atravessa: dunas, savanas, matas, estepes, tundra e neve. Corra pelas encostas, se pendure nos olhos que flutuam no céu e derrube as bocas que tentam te frear. Cada boca que cai te deixa mais rápido.',
+  lead: 'Uma ilha solta no céu, e embaixo uma terra sem fim que se refaz enquanto você atravessa: dunas, savanas, matas, estepes, tundra e neve. Daqui só se vai para a frente, e uma boca enorme vem atrás, cada vez mais rápida. Não perca velocidade: deslize nas descidas, se pendure nos olhos do céu, passe pelos aros e derrube as bocas menores que tentam te frear. Se ela te alcançar, te engole.',
   keys: [
-    ['Mouse', 'Mira. Leve o ponteiro para os lados para virar a câmera.'],
-    ['W A S D', 'Andar'],
+    ['Mouse', 'Mira. A câmera olha um pouco para o lado do ponteiro.'],
+    ['A D', 'Desviar. Você corre sozinho e nunca volta.'],
+    ['W', 'Andar na ilha, antes do salto'],
     ['Espaço', 'Saltar. Segure no chão para um salto longo.'],
     ['Espaço no ar', 'Planar enquanto segurar'],
     ['Shift', 'Deslizar no chão e mergulhar no ar'],
@@ -1454,7 +1586,7 @@ const TXT = {
     ['B', 'Liga e desliga o pontilhado'],
     ['Esc', 'Pausa'],
   ],
-  tip: 'Segure Shift ao cair e a queda vira velocidade quando você tocar o chão. Os aros dourados também aceleram.',
+  tip: 'Segure Shift ao cair e a queda vira velocidade quando você tocar o chão. Os aros dourados e cada boca derrubada também aceleram.',
 };
 let best = 0, statusText = '', btnLabel = 'Começar';
 try { best = Number(localStorage.getItem('deriva-recorde')) || 0; } catch (e) { best = 0; }
@@ -1490,7 +1622,13 @@ function pause() {
   setAim('repouso');
   startBtn.focus({ preventScroll: true });
 }
-startBtn.addEventListener('click', play);
+// Recomeçar recarrega a página e entra direto no jogo: o mundo inteiro (ilha,
+// trilha, caches) nasce limpo, sem precisar desfazer estado à mão.
+startBtn.addEventListener('click', () => {
+  if (state !== 'dead') { play(); return; }
+  try { sessionStorage.setItem('deriva-auto', '1'); } catch (e) { /* sem armazenamento, segue */ }
+  location.reload();
+});
 startBtn.addEventListener('focus', () => { uiDirty = true; });
 startBtn.addEventListener('blur', () => { uiDirty = true; });
 
@@ -1588,6 +1726,28 @@ function drawPanel() {
 }
 function drawHUD() {
   g2.textBaseline = 'alphabetic';
+  // A Boca: escuridão que fecha pelas bordas quando ela chega perto, e a
+  // distância no alto, no centro.
+  if (CH.on) {
+    const near = smooth(110, 15, CH.gap);
+    if (near > 0) {
+      const vg = g2.createRadialGradient(W / 2, H / 2, Math.min(W, H) * (0.62 - near * 0.3), W / 2, H / 2, Math.hypot(W, H) * 0.55);
+      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, `rgba(0,0,0,${(0.35 + near * 0.6).toFixed(3)})`);
+      g2.fillStyle = vg; g2.fillRect(0, 0, W, H);
+    }
+    const gap = Math.max(0, Math.round(CH.gap - CH_EAT));
+    g2.textAlign = 'center';
+    g2.font = `400 13px ${FB}`; g2.fillStyle = '#fff';
+    outlined('a boca está a', W / 2, 30, 3);
+    g2.font = `800 30px ${FD}`;
+    const gg = g2.createLinearGradient(0, 64 - 22, 0, 64);
+    gg.addColorStop(0, '#fff'); gg.addColorStop(0.45, '#fff'); gg.addColorStop(1, '#5c5c5c'); g2.fillStyle = gg;
+    outlined(`${gap} m`, W / 2, 64, 5);
+    const bw = Math.min(220, W * 0.4), bx = W / 2 - bw / 2;
+    g2.fillStyle = '#000'; g2.fillRect(bx, 74, bw, 6);
+    g2.fillStyle = '#fff'; g2.fillRect(bx + 1, 75, (bw - 2) * clamp(gap / (CH_START + 140), 0, 1), 4);
+    g2.textAlign = 'left';
+  }
   // Números com degradê de branco para cinza, como o título: o retículo
   // transforma a parte de baixo de cada algarismo em pontos.
   const grad = (y, size) => {
@@ -1666,7 +1826,8 @@ function drawReticle(x, y) {
 }
 function drawUI() {
   g2.clearRect(0, 0, W, H);
-  if (state === 'play') drawHUD(); else drawPanel();
+  if (state === 'play' || state === 'eaten') drawHUD(); else drawPanel();
+  if (state === 'eaten') { g2.fillStyle = `rgba(0,0,0,${clamp(eatenT * 1.2, 0, 1).toFixed(3)})`; g2.fillRect(0, 0, W, H); }
   const tt = time - toastT;
   if (tt < 2.2 && toastText) {
     g2.save(); g2.globalAlpha = tt < 1.6 ? 1 : 1 - (tt - 1.6) / 0.6;
@@ -1677,7 +1838,7 @@ function drawUI() {
   if (flashV > 0) { g2.fillStyle = `rgba(255,255,255,${flashV.toFixed(3)})`; g2.fillRect(0, 0, W, H); }
   if (state === 'play') {
     if (mouse.inside) drawReticle(mouse.x, mouse.y);
-  } else if (mouse.inside && !coarseOnly) {
+  } else if (state !== 'eaten' && mouse.inside && !coarseOnly) {
     const im = hands[aimState];
     if (im && im.complete) g2.drawImage(im, Math.round(mouse.x - HOT[aimState][0]), Math.round(mouse.y - HOT[aimState][1]));
   }
@@ -1705,11 +1866,17 @@ function frame(now) {
       for (let i = 0; i < sub; i++) step(dt / sub);
     }
     updateEnemies(dt, time);
+    updateChaser(dt, time);
     checkContacts(time);
-    P.dist += Math.hypot(P.p.x - prevP.x, P.p.z - prevP.z);
+    P.dist = Math.max(P.dist, courseU(P.p.x, P.p.z) - U0);
     saveClock += dt; if (saveClock > 2) { saveClock = 0; saveBest(); }
   }
   prevP.copy(P.p);
+  if (state === 'eaten') {
+    eatenT += dt;
+    updateChaser(dt, time);
+    if (eatenT > 1.1) finishSwallow();
+  }
 
   updateIntro(dt, time);
   updateCamera(dt, time);
@@ -1757,4 +1924,5 @@ function frame(now) {
   renderer.render(postScene, postCam);
 }
 requestAnimationFrame(frame);
+try { if (sessionStorage.getItem('deriva-auto')) { sessionStorage.removeItem('deriva-auto'); play(); } } catch (e) { /* idem */ }
 })();
