@@ -787,39 +787,82 @@ function updateEnemies(dt, t) {
 // distância chega a zero, engole. Longe demais, ela apressa o passo.
 // ---------------------------------------------------------------------------
 const CH = { on: false, u: 0, off: 0, sp: 0, t: 0, gap: 999, pos: new THREE.Vector3(), g: new THREE.Group() };
-const CH_START = 130, CH_EAT = 12;
+const CH_START = 130, CH_EAT = 16;
+// Dentadura humana gigante: arcada em U de gengiva rosa com os 16 dentes de
+// cada lado (incisivos, caninos, pré-molares, molares) em medidas de
+// milímetro, depois escalada. A arcada de cima abre numa dobradiça no fundo.
+const DENT_MM = 0.7;
 {
-  const flesh = toon(0x6e4b3c);
-  CH.flesh = flesh;
-  const b = new THREE.Mesh(new THREE.SphereGeometry(16, 28, 20), flesh); b.scale.set(1.15, 0.95, 1);
-  CH.mouth = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), blackMat); CH.mouth.position.set(0, -2, 12.5); CH.mouth.scale.set(12, 7, 5.5);
-  const gum = new THREE.Mesh(new THREE.TorusGeometry(1, 0.09, 8, 40), toon(0x8e4a48)); gum.scale.set(12.3, 7.3, 6); gum.position.copy(CH.mouth.position);
-  CH.gum = gum;
-  const toothM = toon(0xe9e2cf);
-  CH.teeth = [];
-  for (let k = 0; k < 18; k++) {
-    const a = k / 18 * Math.PI * 2;
-    const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.6, 5), toothM);
-    tooth.userData.a = a;
-    CH.teeth.push(tooth); CH.g.add(tooth);
+  const gumMat = toon(0xc7707a), toothMat = toonVC();
+  // largura ao longo da arcada, profundidade, altura da coroa (mm), do centro para trás
+  const TEETH = [[8.5, 6, 10.5], [6.5, 5.5, 9], [7.5, 7.5, 11], [7, 8.5, 8.5], [7, 9, 8], [10, 10.5, 7], [9.5, 10, 6.5], [9, 9.5, 6]];
+  const toothGeo = new THREE.SphereGeometry(0.5, 14, 10), GUM_Y = 18.2;
+  function arch(w, D) {
+    // parábola: frente em z = D, fundo em z = 0; amostrada por comprimento de arco
+    const pts = [];
+    for (let k = 0; k <= 200; k++) { const sp = k / 200; pts.push(new THREE.Vector3(w * sp, 0, D * (1 - sp * sp))); }
+    const len = [0];
+    for (let k = 1; k < pts.length; k++) len.push(len[k - 1] + pts[k].distanceTo(pts[k - 1]));
+    return { pts, len, at(L) {
+      let k = 1; while (k < len.length - 1 && len[k] < L) k++;
+      const f = clamp((L - len[k - 1]) / (len[k] - len[k - 1]), 0, 1);
+      const p = pts[k - 1].clone().lerp(pts[k], f), tg = pts[k].clone().sub(pts[k - 1]).normalize();
+      return { p, tg };
+    } };
   }
-  const eyeW = toon(0xf2eee6);
-  for (const sx of [-1, 1]) {
-    const e = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12), eyeW); e.position.set(sx * 7.5, 9, 9.5);
-    const pu = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8), blackMat); pu.position.set(sx * 7.5, 9, 12.4);
-    CH.g.add(e, pu);
+  function jaw(upper, scl) {
+    const g = new THREE.Group(), dir = upper ? 1 : -1;
+    const need = TEETH.reduce((a, t) => a + t[0], 0) + 2;
+    let w = 27, D = 46;
+    const a0 = arch(w, D); const f = need / a0.len[a0.len.length - 1];
+    w *= f * scl; D *= f * scl;
+    const a = arch(w, D);
+    for (const side of [-1, 1]) {
+      let L = 0;
+      TEETH.forEach(([tw, td, th], n) => {
+        const c = a.at(L + tw / 2); L += tw;
+        const m = new THREE.Mesh(toothGeo, toothMat);
+        const tint = 0.9 + 0.06 * hash2(n * 7 + side, upper ? 3 : 9);
+        const col = new Float32Array(toothGeo.attributes.position.count * 3);
+        for (let q = 0; q < col.length; q += 3) { col[q] = 0.94 * tint; col[q + 1] = 0.91 * tint; col[q + 2] = 0.82 * tint; }
+        m.geometry = toothGeo.clone(); m.geometry.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        // a coroa vai do plano da mordida (y = 0) até sumir na gengiva; os
+        // de cima descem um pouco além, como numa sobremordida
+        const h = th * (upper ? 1 : 0.9), sy = Math.min(h * 2, 19);
+        m.scale.set(tw * 0.96, sy, td);
+        m.position.set(c.p.x * side, dir * (sy / 2 - (upper ? 1.5 : 0)), c.p.z);
+        m.rotation.y = Math.atan2(c.tg.x * side, c.tg.z) - Math.PI / 2;
+        g.add(m);
+      });
+    }
+    // gengiva: tubo achatado seguindo a arcada, cobrindo a raiz dos dentes
+    const gp = [];
+    for (let k = -40; k <= 40; k++) { const c = a.at(Math.abs(k) / 40 * (need - 1)); gp.push(new THREE.Vector3(c.p.x * Math.sign(k || 1), dir * GUM_Y, c.p.z)); }
+    const gum = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(gp), 80, 7, 12), gumMat);
+    gum.scale.y = 0.8;
+    g.add(gum);
+    // ponta de cada lado fechada com uma bola de gengiva
+    for (const sd of [-1, 1]) { const cap = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10), gumMat); cap.position.set(gp[sd < 0 ? 0 : gp.length - 1].x, dir * GUM_Y * 0.8, gp[0].z); cap.scale.y = 0.8; g.add(cap); }
+    return { g, D };
   }
-  CH.g.add(b, CH.mouth, gum);
+  const up = jaw(true, 1.04), lo = jaw(false, 0.97);
+  const hinge = new THREE.Group();
+  hinge.scale.setScalar(DENT_MM);
+  // dobradiça no fundo da arcada; o conjunto fica centrado na posição da Boca
+  const shift = -up.D / 2;
+  up.g.position.z = lo.g.position.z = 0;
+  const upPivot = new THREE.Group(), loPivot = new THREE.Group();
+  upPivot.add(up.g); loPivot.add(lo.g);
+  upPivot.position.set(0, 0, shift); loPivot.position.set(0, 0, shift);
+  hinge.add(upPivot, loPivot);
+  CH.g.add(hinge);
+  CH.upper = upPivot; CH.lower = loPivot;
   CH.g.visible = false;
   scene.add(CH.g);
 }
 function placeTeeth(open) {
-  for (const tooth of CH.teeth) {
-    const a = tooth.userData.a, up = Math.sin(a) > 0;
-    tooth.position.set(Math.cos(a) * 11, -2 + Math.sin(a) * 6.3 * open, 13.6);
-    tooth.rotation.set(0, 0, up ? Math.PI : 0);
-  }
-  CH.mouth.scale.y = 7 * open; CH.gum.scale.y = 7.3 * open;
+  CH.upper.rotation.x = -open * 0.55;
+  CH.lower.rotation.x = open * 0.16;
 }
 function updateChaser(dt, t) {
   const cf = courseFrame(P.p.x, P.p.z, cfHud);
