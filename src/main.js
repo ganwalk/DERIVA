@@ -76,7 +76,14 @@ function farOffset(x, z, t, px, pz) {
   const c = Math.max(d - 100, 0);
   return b * far - c * c * 0.00008;
 }
-function biomeAt(x, z, t) { return 0.5 + 0.5 * Math.sin(x * 0.0011 + Math.sin(z * 0.0008) * 2.2 + t * 0.015); }
+// Clima: dois campos lentos, temperatura e umidade, que escolhem o bioma como
+// na Terra (deserto, savana, floresta, estepe, taiga, tundra, neve). O shader
+// do relevo repete as mesmas contas.
+function climateAt(x, z, t) {
+  const T = 0.5 + 0.5 * Math.sin(x * 0.0012 + Math.sin(z * 0.0009) * 2.1 + t * 0.004);
+  const M = 0.5 + 0.5 * Math.sin(z * 0.0011 + Math.sin(x * 0.0008 + 1.7) * 2.4 - t * 0.003);
+  return [T, M];
+}
 
 // ---------------------------------------------------------------------------
 // Render: cena em baixa resolução, depois o retículo de Bayer por cima.
@@ -107,13 +114,14 @@ uiTex.minFilter = uiTex.magFilter = THREE.NearestFilter; uiTex.generateMipmaps =
 const postMat = new THREE.ShaderMaterial({
   uniforms: {
     tScene: { value: null }, tUI: { value: uiTex }, uRes: { value: new THREE.Vector2(1, 1) },
-    uScreen: { value: new THREE.Vector2(1, 1) }, uCell: { value: 2 },
+    uScreen: { value: new THREE.Vector2(1, 1) }, uCell: { value: 1 },
     uPhase: { value: new THREE.Vector2(0, 0) }, uBias: { value: 4 }, uOn: { value: 1 },
+    uSpread: { value: 0.5 }, uShade: { value: 0.62 },
   },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     uniform sampler2D tScene; uniform sampler2D tUI; uniform vec2 uRes; uniform vec2 uScreen; uniform float uCell;
-    uniform vec2 uPhase; uniform float uBias; uniform float uOn;
+    uniform vec2 uPhase; uniform float uBias; uniform float uOn; uniform float uSpread; uniform float uShade;
     varying vec2 vUv;
     float bayer4(vec2 p){
       vec4 r = p.y < 0.5 ? vec4(0.,8.,2.,10.) : (p.y < 1.5 ? vec4(12.,4.,14.,6.) : (p.y < 2.5 ? vec4(3.,11.,1.,9.) : vec4(15.,7.,13.,5.)));
@@ -122,8 +130,10 @@ const postMat = new THREE.ShaderMaterial({
     float lum(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)) * 255.0; }
     void main(){
       vec3 c = texture2D(tScene, vUv).rgb;
-      float bs = bayer4(mod(floor(vUv * uRes) + uPhase, 4.0));
-      vec3 sd = lum(c) < bs * (255.0 / 16.0) + uBias ? vec3(0.0) : c;
+      // Retículo no pixel da tela (não no da cena) e suave: abaixo do limiar a
+      // cor só escurece, em vez de virar preto, e o limiar cobre só os tons baixos.
+      float bs = bayer4(mod(floor(gl_FragCoord.xy) + uPhase, 4.0));
+      vec3 sd = lum(c) < bs * (255.0 / 16.0) * uSpread + uBias ? c * uShade : c;
       vec4 u = texture2D(tUI, vUv);
       float bu = bayer4(mod(floor(vUv * uScreen / uCell) + uPhase, 4.0));
       vec3 ud = lum(u.rgb) < bu * (255.0 / 16.0) + uBias ? vec3(0.0) : u.rgb;
@@ -143,7 +153,7 @@ let phaseIndex = 0, phaseClock = 0;
 let W = 1, H = 1, rt = null;
 function resize() {
   W = innerWidth; H = innerHeight;
-  const px = W > 1700 ? 4 : W < 700 ? 2 : 3;
+  const px = W > 1600 ? 2 : 1;
   renderer.setSize(W, H, false);
   const rw = Math.max(1, Math.floor(W / px)), rh = Math.max(1, Math.floor(H / px));
   if (rt) rt.dispose();
@@ -153,7 +163,6 @@ function resize() {
   camera.aspect = W / H; camera.updateProjectionMatrix();
   ui.width = W; ui.height = H;
   postMat.uniforms.uScreen.value.set(W, H);
-  postMat.uniforms.uCell.value = px >= 3 ? 2 : 1;
   uiDirty = true;
 }
 addEventListener('resize', resize);
@@ -163,7 +172,7 @@ resize();
 const gradTex = new THREE.DataTexture(new Uint8Array([110, 110, 110, 255, 190, 190, 190, 255, 255, 255, 255, 255]), 3, 1, THREE.RGBAFormat);
 gradTex.minFilter = gradTex.magFilter = THREE.NearestFilter; gradTex.needsUpdate = true;
 const toon = (color) => new THREE.MeshToonMaterial({ color, gradientMap: gradTex });
-const hemi = new THREE.HemisphereLight(0xffffff, 0xaa88aa, 0.62);
+const hemi = new THREE.HemisphereLight(0xe4ecf2, 0x8c7a62, 0.62);
 const sunLight = new THREE.DirectionalLight(0xffffff, 0.75);
 scene.add(hemi, sunLight, sunLight.target);
 const sunDir = new THREE.Vector3(0.5, 0.6, -0.4).normalize();
@@ -184,24 +193,25 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(3000, 48, 24), new THREE.Sha
       vec3 col = mix(uHor, uTop, smoothstep(-0.02, 0.55, y));
       float ang = atan(d.z, d.x);
       float sw = sin(ang * 9.0 + y * 14.0 - uTime * 0.15) * 0.5 + 0.5;
-      col = mix(col, col * vec3(1.1, 0.9, 1.12), sw * smoothstep(0.05, 0.5, y) * 0.6);
+      col = mix(col, col * vec3(1.05, 1.0, 0.96), sw * smoothstep(0.05, 0.5, y) * 0.35);
       vec3 s = normalize(uSun);
       float sd = dot(d, s);
       float a = acos(clamp(sd, -1.0, 1.0));
       float disc = 1.0 - smoothstep(0.075, 0.08, a);
       float rings = step(0.55, fract(a * 22.0 - uTime * 0.25)) * (1.0 - smoothstep(0.08, 0.34, a)) * step(0.08, a);
-      col += vec3(1.0, 0.85, 0.6) * pow(max(sd, 0.0), 10.0) * 0.25;
-      col = mix(col, vec3(1.0, 0.9, 0.72), rings * 0.55);
-      col = mix(col, vec3(1.0, 0.97, 0.86), disc);
+      col += vec3(1.0, 0.9, 0.75) * pow(max(sd, 0.0), 10.0) * 0.25;
+      col = mix(col, vec3(1.0, 0.96, 0.88), rings * 0.18);
+      col = mix(col, vec3(1.0, 0.98, 0.92), disc);
       vec3 pd = normalize(vec3(-0.55, 0.3, -0.78));
       float pa = acos(clamp(dot(d, pd), -1.0, 1.0));
       float st = sin((d.y - pd.y) * 85.0 + sin(d.x * 38.0) * 2.2 + uTime * 0.08);
-      vec3 pc = st > 0.0 ? vec3(0.35, 0.95, 0.85) : vec3(0.98, 0.38, 0.78);
+      // Um gigante gasoso em faixas de ocre e creme, lavado pela atmosfera.
+      vec3 pc = mix(vec3(0.62, 0.49, 0.37), vec3(0.88, 0.83, 0.74), st * 0.5 + 0.5);
       float lit = clamp(dot(normalize(d - pd * 0.98), s) * 3.0 + 0.85, 0.72, 1.0);
-      col = mix(col, pc * lit, 1.0 - smoothstep(0.17, 0.175, pa));
+      col = mix(col, mix(pc * lit, uHor, 0.3), 1.0 - smoothstep(0.17, 0.175, pa));
       float ringBand = abs((d.y - pd.y) + (d.x - pd.x) * 0.35);
       float pr = (1.0 - smoothstep(0.006, 0.012, ringBand)) * smoothstep(0.17, 0.18, pa) * (1.0 - smoothstep(0.3, 0.32, pa));
-      col = mix(col, vec3(1.0, 0.95, 0.5), pr);
+      col = mix(col, mix(vec3(0.86, 0.82, 0.74), uHor, 0.3), pr);
       col = mix(col, uHor, smoothstep(0.02, -0.12, y));
       gl_FragColor = vec4(col, 1.0);
     }`,
@@ -233,25 +243,47 @@ const terrMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform float uTime; uniform vec3 uSun; uniform vec3 uFog; uniform vec3 uCam; uniform float uFogNear; uniform float uFogFar;
     varying vec3 vWorld; varying vec3 vN;
-    vec3 pal(float t, vec3 a, vec3 b, vec3 c, vec3 d){ return a + b * cos(6.28318 * (c * t + d)); }
+    float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float vn(vec2 p){
+      vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + 1.0), f.x), f.y);
+    }
+    // seco -> médio -> úmido, com faixas de transição curtas para os biomas lerem
+    vec3 tri(vec3 a, vec3 b, vec3 c, float x){ return mix(mix(a, b, smoothstep(0.3, 0.44, x)), c, smoothstep(0.56, 0.7, x)); }
     void main(){
       vec3 n = normalize(vN);
-      float biome = 0.5 + 0.5 * sin(vWorld.x * 0.0011 + sin(vWorld.z * 0.0008) * 2.2 + uTime * 0.015);
       float h = vWorld.y;
-      float swirl = sin(vWorld.x * 0.013 + sin(vWorld.z * 0.011 + uTime * 0.05) * 2.5) * 0.06;
-      float t = h * 0.0045 + biome * 0.7 + uTime * 0.004 + swirl;
-      vec3 A = pal(t, vec3(0.74, 0.64, 0.7), vec3(0.3, 0.36, 0.3), vec3(1.0), vec3(0.0, 0.33, 0.67));
-      vec3 B = pal(t, vec3(0.78, 0.66, 0.54), vec3(0.24, 0.32, 0.4), vec3(1.0, 0.8, 0.5), vec3(0.8, 0.9, 0.3));
-      vec3 base = mix(A, B, smoothstep(0.3, 0.7, biome));
-      vec3 alt = pal(t + 0.45, vec3(0.62, 0.55, 0.65), vec3(0.4, 0.4, 0.35), vec3(1.0), vec3(0.1, 0.4, 0.7));
-      float steep = 1.0 - n.y;
-      base = mix(base, alt, smoothstep(0.28, 0.5, steep) * 0.8);
+      vec2 xz = vWorld.xz;
+      float T = 0.5 + 0.5 * sin(xz.x * 0.0012 + sin(xz.y * 0.0009) * 2.1 + uTime * 0.004);
+      float M = 0.5 + 0.5 * sin(xz.y * 0.0011 + sin(xz.x * 0.0008 + 1.7) * 2.4 - uTime * 0.003);
+      float patchN = vn(xz * 0.013), grain = vn(xz * 0.09);
+      T = clamp(T - h * 0.0011 + (patchN - 0.5) * 0.08, 0.0, 1.0);
+      M = clamp(M + (patchN - 0.5) * 0.1, 0.0, 1.0);
+      // Paleta da Terra. Linhas: frio, temperado, quente. Colunas: seco, médio, úmido.
+      vec3 cold = tri(vec3(0.56, 0.53, 0.45), vec3(0.23, 0.30, 0.21), vec3(0.86, 0.89, 0.92), M); // tundra, taiga, neve
+      vec3 temp = tri(vec3(0.66, 0.62, 0.43), vec3(0.42, 0.50, 0.26), vec3(0.22, 0.35, 0.17), M); // estepe, campo, floresta
+      vec3 hot  = tri(vec3(0.86, 0.72, 0.50), vec3(0.74, 0.62, 0.36), vec3(0.15, 0.31, 0.13), M); // deserto, savana, mata
+      vec3 base = mix(mix(cold, temp, smoothstep(0.28, 0.42, T)), hot, smoothstep(0.58, 0.72, T));
+      // Manchas: tufos de vegetação ou de areia mais escura, e um grão fino.
+      float veg = smoothstep(0.35, 0.75, M) * (1.0 - smoothstep(0.75, 0.9, M) * (1.0 - smoothstep(0.42, 0.28, T)));
+      base *= 1.0 - smoothstep(0.55, 0.8, vn(xz * 0.05 + 7.0)) * 0.22 * veg;
+      base *= 0.94 + grain * 0.12;
+      // Encostas viram rocha: granito no frio, rocha parda no temperado, arenito no quente.
+      vec3 rock = mix(mix(vec3(0.46, 0.47, 0.48), vec3(0.47, 0.41, 0.34), smoothstep(0.28, 0.42, T)), vec3(0.68, 0.38, 0.24), smoothstep(0.58, 0.72, T));
+      rock *= 0.9 + 0.1 * sin(h * 0.55 + grain * 1.5);
+      float steep = 1.0 - n.y + (grain - 0.5) * 0.08;
+      base = mix(base, rock, smoothstep(0.26, 0.42, steep));
+      // Neve nos picos: a linha sobe com o calor e só assenta onde é plano.
+      float snowline = mix(60.0, 330.0, T);
+      float snow = smoothstep(snowline, snowline + 35.0, h + (patchN - 0.5) * 40.0) * (1.0 - smoothstep(0.35, 0.55, steep));
+      base = mix(base, vec3(0.92, 0.94, 0.96), snow);
+      // Curvas de nível que descem devagar: o toque estranho, sem roubar a cor.
       float band = fract(h * 0.045 - uTime * 0.05);
       float line = smoothstep(0.0, 0.03, band) * (1.0 - smoothstep(0.07, 0.1, band));
       float l = dot(n, normalize(uSun));
-      float tl = l > 0.45 ? 1.0 : (l > 0.1 ? 0.82 : 0.6);
-      vec3 col = base * tl * 1.18;
-      col = mix(col, col * 0.3, line * 0.85);
+      float tl = l > 0.45 ? 1.0 : (l > 0.1 ? 0.84 : 0.66);
+      vec3 col = base * tl * 1.08;
+      col = mix(col, col * 0.72, line * 0.4);
       float dist = length(vWorld - uCam);
       col = mix(col, uFog, smoothstep(uFogNear, uFogFar, dist));
       gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -345,7 +377,7 @@ function groundN(x, z, y, out) { return onIsland(x, z, y) ? out.set(0, 1, 0) : n
 const playerG = new THREE.Group();
 const body = new THREE.Group();
 playerG.add(body);
-const C_CREAM = new THREE.Color(0xfff3e4), C_MAG = new THREE.Color(0xff2f8a), C_GOLD = new THREE.Color(0xffc93a), C_TEAL = new THREE.Color(0x3fe0c8);
+const C_CREAM = new THREE.Color(0xece2cf), C_MAG = new THREE.Color(0x9a2c24), C_GOLD = new THREE.Color(0xc4983f), C_TEAL = new THREE.Color(0x34507a);
 const toonVC = () => new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors: true, gradientMap: gradTex });
 {
   const prof = [new THREE.Vector2(0.001, 0.3)];
@@ -376,21 +408,21 @@ const toonVC = () => new THREE.MeshToonMaterial({ color: 0xffffff, vertexColors:
   g.computeVertexNormals();
   body.add(new THREE.Mesh(g, toonVC()));
 }
-const hoodMat = toon(0xff3fa4);
+const hoodMat = toon(0x9a2c24);
 const headG = new THREE.Group(); headG.position.y = 2.36; body.add(headG);
 const hoodBall = new THREE.Mesh(new THREE.SphereGeometry(0.5, 20, 16), hoodMat); hoodBall.scale.set(1, 1.08, 1.06);
 const hoodTip = new THREE.Mesh(new THREE.ConeGeometry(0.3, 1.05, 14), hoodMat); hoodTip.position.set(0, 0.64, 0.16); hoodTip.rotation.x = 0.38;
-const tassel = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), toon(0xffc93a)); tassel.position.set(0, 1.1, 0.38);
+const tassel = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), toon(0xc4983f)); tassel.position.set(0, 1.1, 0.38);
 const face = new THREE.Mesh(new THREE.SphereGeometry(0.37, 16, 12), new THREE.MeshBasicMaterial({ color: 0x0a0410 })); face.position.set(0, -0.03, -0.31); face.scale.set(1, 1.04, 0.55);
 const eyeGlow = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.05, 0.04), eyeGlow); eyeL.position.set(-0.125, 0.03, -0.5); eyeL.rotation.z = -0.15;
 const eyeR = eyeL.clone(); eyeR.position.x = 0.125; eyeR.rotation.z = 0.15;
-const brow = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.05, 6, 20, Math.PI), toon(0xffc93a)); brow.position.set(0, -0.02, -0.33); brow.scale.set(1, 1.05, 1);
+const brow = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.05, 6, 20, Math.PI), toon(0xc4983f)); brow.position.set(0, -0.02, -0.33); brow.scale.set(1, 1.05, 1);
 headG.add(hoodBall, hoodTip, tassel, face, eyeL, eyeR, brow);
 function makeArm(side) {
   const g = new THREE.Group(); g.position.set(side * 0.44, 1.92, 0);
-  const sleeve = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.9, 12), toon(0x3fe0c8)); sleeve.position.y = -0.42;
-  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.23, 0.1, 12), toon(0xffc93a)); cuff.position.y = -0.84;
+  const sleeve = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.9, 12), toon(0x34507a)); sleeve.position.y = -0.42;
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.23, 0.1, 12), toon(0xc4983f)); cuff.position.y = -0.84;
   const hand = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshBasicMaterial({ color: 0x0a0410 })); hand.position.y = -0.96;
   g.add(sleeve, cuff, hand);
   body.add(g);
@@ -416,13 +448,13 @@ scene.add(playerG);
 const island = new THREE.Group();
 {
   const R = ISL.R;
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.96, 3, 48, 1), toon(0x46e8b8));
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(R, R * 0.96, 3, 48, 1), toon(0x7a8d4c));
   top.position.y = -1.5;
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(R * 0.98, 0.5, 6, 48), toon(0xffc93a)); rim.rotation.x = Math.PI / 2; rim.position.y = -0.2;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(R * 0.98, 0.5, 6, 48), toon(0x8a6a44)); rim.rotation.x = Math.PI / 2; rim.position.y = -0.2;
   const rockG = new THREE.ConeGeometry(R * 0.97, 46, 40, 14);
   rockG.rotateX(Math.PI); rockG.translate(0, -26, 0);
   const rp = rockG.attributes.position, rc = new Float32Array(rp.count * 3);
-  const strata = [new THREE.Color(0xff5fa2), new THREE.Color(0xffa04a), new THREE.Color(0x9b6bff), new THREE.Color(0xff2f8a)];
+  const strata = [new THREE.Color(0xb98a5e), new THREE.Color(0xd6bf98), new THREE.Color(0x8b6748), new THREE.Color(0xa65a3a)];
   for (let i = 0; i < rp.count; i++) {
     const x = rp.getX(i), y = rp.getY(i), z = rp.getZ(i);
     const a = Math.atan2(x, z), j = 1 + (hash2(Math.round(a * 20), Math.round(y)) - 0.5) * 0.28;
@@ -437,21 +469,21 @@ const island = new THREE.Group();
   for (let k = 0; k < 9; k++) {
     const a = k / 9 * Math.PI * 2 + 0.3, r = R * (0.55 + 0.3 * hash2(k, 7));
     const len = 8 + 16 * hash2(k, 3);
-    const root = new THREE.Mesh(new THREE.ConeGeometry(0.6 + hash2(k, 9), len, 6), toon(k % 2 ? 0x46e8b8 : 0xffc93a));
+    const root = new THREE.Mesh(new THREE.ConeGeometry(0.6 + hash2(k, 9), len, 6), toon(k % 2 ? 0x6e7f45 : 0x5e4630));
     root.rotation.x = Math.PI; root.position.set(Math.sin(a) * r, -6 - len / 2 - 10 * (1 - r / R), Math.cos(a) * r);
     island.add(root);
   }
   // arco na borda da frente
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(5.5, 0.7, 8, 28, Math.PI), toon(0xff2f8a));
+  const arch = new THREE.Mesh(new THREE.TorusGeometry(5.5, 0.7, 8, 28, Math.PI), toon(0xa3542f));
   const fx = -Math.sin(spawnYaw), fz = -Math.cos(spawnYaw);
   arch.position.set(fx * (R - 3), 0, fz * (R - 3)); arch.rotation.y = spawnYaw;
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.9, 10, 8), toon(0xffc93a)); knob.position.set(fx * (R - 3), 6.3, fz * (R - 3));
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.9, 10, 8), toon(0xc4983f)); knob.position.set(fx * (R - 3), 6.3, fz * (R - 3));
   island.add(arch, knob);
   // três hastes com olhos no tampo
   for (let k = 0; k < 3; k++) {
     const a = spawnYaw + Math.PI + (k - 1) * 0.9, r = R * 0.68, hgt = 4 + k * 1.5;
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, hgt, 6), toon(0x9b6bff)); stem.position.set(Math.sin(a) * r, hgt / 2, Math.cos(a) * r);
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), toon(0xffffff)); eye.position.set(Math.sin(a) * r, hgt + 0.8, Math.cos(a) * r);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.3, hgt, 6), toon(0x6b5a45)); stem.position.set(Math.sin(a) * r, hgt / 2, Math.cos(a) * r);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), toon(0xf2eee6)); eye.position.set(Math.sin(a) * r, hgt + 0.8, Math.cos(a) * r);
     const pu = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 6), new THREE.MeshBasicMaterial({ color: 0x000000 })); pu.position.copy(eye.position); pu.userData.eye = eye;
     island.add(stem, eye, pu);
   }
@@ -505,7 +537,7 @@ const scIdx = [];
 for (let i = 0; i < SC_MAX - 1; i++) { const a = i * 2; scIdx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
 for (let i = 0; i < SC_MAX; i++) {
   const gold = Math.floor(i / 3) % 2 === 1;
-  for (let s = 0; s < 2; s++) { const k = (i * 2 + s) * 3; scCol[k] = 1; scCol[k + 1] = gold ? 0.82 : 0.2; scCol[k + 2] = gold ? 0.25 : 0.18; }
+  for (let s = 0; s < 2; s++) { const k = (i * 2 + s) * 3; scCol[k] = gold ? 0.78 : 0.6; scCol[k + 1] = gold ? 0.6 : 0.17; scCol[k + 2] = gold ? 0.26 : 0.14; }
 }
 scarfGeo.setIndex(scIdx);
 scarfGeo.setAttribute('position', new THREE.BufferAttribute(scPos, 3));
@@ -562,7 +594,7 @@ function ringAt(i, j) {
   return r;
 }
 const MAX_ORBS = 260;
-const eyeball = new THREE.InstancedMesh(new THREE.SphereGeometry(3.2, 16, 12), toon(0xffffff), MAX_ORBS);
+const eyeball = new THREE.InstancedMesh(new THREE.SphereGeometry(3.2, 16, 12), toon(0xf2eee6), MAX_ORBS);
 const iris = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 14, 10), toon(0xffffff), MAX_ORBS);
 const pupil = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 8), new THREE.MeshBasicMaterial({ color: 0x000000 }), MAX_ORBS);
 const stemGeo = new THREE.CylinderGeometry(0.4, 0.7, 1, 6); stemGeo.translate(0, 0.5, 0);
@@ -571,8 +603,10 @@ const MAX_RINGS = 120;
 const ringGeo = new THREE.TorusGeometry(RING_R * 1.6, 0.75, 8, 32);
 const rings = new THREE.InstancedMesh(ringGeo, toon(0xffffff), MAX_RINGS);
 const tmpC = new THREE.Color();
-for (let i = 0; i < MAX_ORBS; i++) { iris.setColorAt(i, tmpC.setHSL(0.5, 1, 0.5)); stems.setColorAt(i, tmpC); }
-for (let i = 0; i < MAX_RINGS; i++) rings.setColorAt(i, tmpC.setHSL(0.13, 1, 0.55));
+// Cores de íris de verdade: castanho, avelã, verde, azul, cinza, âmbar.
+const IRIS = [0x5a3a22, 0x7a5a2e, 0x4f6e4a, 0x4a6f8f, 0x6b7378, 0x8a6a3a].map((c) => new THREE.Color(c));
+for (let i = 0; i < MAX_ORBS; i++) { iris.setColorAt(i, IRIS[0]); stems.setColorAt(i, IRIS[0]); }
+for (let i = 0; i < MAX_RINGS; i++) rings.setColorAt(i, tmpC.setHSL(0.11, 0.55, 0.5));
 [eyeball, iris, pupil, stems, rings].forEach((m) => { m.frustumCulled = false; m.count = 0; scene.add(m); });
 let visOrbs = [], visRings = [];
 const dummy = new THREE.Object3D();
@@ -598,7 +632,7 @@ function updateProps(t) {
     dummy.position.set(o.x + tv.x * 2.55, o.y + tv.y * 2.55, o.z + tv.z * 2.55);
     dummy.lookAt(P.p.x, P.p.y + 1.5, P.p.z); dummy.scale.set(1.75, 1.75, 0.8); dummy.updateMatrix();
     iris.setMatrixAt(k, dummy.matrix);
-    iris.setColorAt(k, tmpC.setHSL((o.hue + t * 0.03) % 1, 1, 0.52));
+    iris.setColorAt(k, IRIS[Math.floor(o.hue * IRIS.length) % IRIS.length]);
     dummy.position.set(o.x + tv.x * 3.05, o.y + tv.y * 3.05, o.z + tv.z * 3.05);
     dummy.scale.set(0.8, 0.8, 0.4); dummy.updateMatrix();
     pupil.setMatrixAt(k, dummy.matrix);
@@ -607,7 +641,7 @@ function updateProps(t) {
       dummy.position.set(o.x, o.base - 2, o.z); dummy.rotation.set(Math.sin(t * 0.4 + o.hue * 9) * 0.04, 0, Math.cos(t * 0.33 + o.hue * 7) * 0.04);
       dummy.scale.set(1, hgt, 1); dummy.updateMatrix();
       stems.setMatrixAt(s, dummy.matrix);
-      stems.setColorAt(s, tmpC.setHSL((o.hue + 0.5) % 1, 0.85, 0.6));
+      stems.setColorAt(s, tmpC.setHSL(0.07 + o.hue * 0.17, 0.28, 0.36));
       s++;
     }
   }
@@ -627,7 +661,7 @@ function updateProps(t) {
     dummy.position.set(r.x, r.y, r.z); dummy.rotation.set(0, r.yaw, Math.sin(t * 0.5 + r.hue * 10) * 0.15);
     const sc = glow ? 1.25 : 1; dummy.scale.set(sc, sc, sc); dummy.updateMatrix();
     rings.setMatrixAt(k, dummy.matrix);
-    rings.setColorAt(k, glow ? tmpC.setRGB(1, 1, 1) : tmpC.setHSL(0.11 + Math.sin(t + r.hue * 6) * 0.03, 1, 0.56));
+    rings.setColorAt(k, glow ? tmpC.setRGB(1, 1, 1) : tmpC.setHSL(0.11 + Math.sin(t + r.hue * 6) * 0.01, 0.55, 0.5));
   }
   rings.count = Math.min(visRings.length, MAX_RINGS);
   rings.instanceMatrix.needsUpdate = true; if (rings.instanceColor) rings.instanceColor.needsUpdate = true;
@@ -648,7 +682,7 @@ const whiteMat = toon(0xffffff);
 const toothGeo = new THREE.ConeGeometry(0.22, 0.5, 4);
 for (let i = 0; i < 10; i++) {
   const g = new THREE.Group();
-  const mat = toon(0xff66aa);
+  const mat = toon(0xb0705a);
   const b = new THREE.Mesh(bodyGeo, mat);
   const mouth = new THREE.Mesh(mouthGeo, blackMat); mouth.position.set(0, -0.35, 1.75); mouth.scale.set(1.25, 0.6, 0.7);
   const e1 = new THREE.Mesh(eGeo, whiteMat); e1.position.set(-0.75, 0.95, 1.6);
@@ -710,7 +744,7 @@ function updateEnemies(dt, t) {
     e.g.lookAt(P.p.x, P.p.y + 1.4, P.p.z);
     const open = e.stun > 0 ? 0.25 : 0.35 + 0.65 * Math.abs(Math.sin(e.t * (d < 40 ? 11 : 4)));
     e.mouth.scale.y = 0.25 + open * 0.75;
-    e.mat.color.setHSL((e.seed + e.t * 0.12) % 1, 0.9, e.stun > 0 ? 0.8 : 0.6);
+    e.mat.color.setHSL(0.02 + e.seed * 0.06, 0.42, e.stun > 0 ? 0.72 : 0.5);
   }
 }
 
@@ -736,7 +770,7 @@ function emit(x, y, z, n, speed, hue, spread = 1, up = 0) {
     const s = speed * (0.4 + Math.random() * 0.6);
     pVel[i * 3] = Math.sin(b) * Math.cos(a) * s * spread; pVel[i * 3 + 1] = Math.abs(Math.cos(b)) * s + up; pVel[i * 3 + 2] = Math.sin(b) * Math.sin(a) * s * spread;
     pLife[i] = 0.6 + Math.random() * 0.7;
-    if (hue < 0) tmpC.setRGB(1, 1, 1); else tmpC.setHSL((hue + Math.random() * 0.25) % 1, 1, 0.6);
+    if (hue < 0) tmpC.setRGB(0.96, 0.93, 0.87); else tmpC.setHSL(0.04 + hue * 0.08 + Math.random() * 0.04, 0.4, 0.5 + Math.random() * 0.2);
     pCol[i * 3] = tmpC.r; pCol[i * 3 + 1] = tmpC.g; pCol[i * 3 + 2] = tmpC.b;
   }
 }
@@ -1207,6 +1241,37 @@ function updateCamera(dt, t) {
   if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = lerp(camera.fov, fov, 1 - Math.exp(-6 * dt)); camera.updateProjectionMatrix(); }
 }
 
+// O cachecol não atravessa o corpo: cada ponto que entra na túnica ou no capuz
+// é empurrado para fora, no espaço do corpo (que já inclui inclinação e
+// agachamento). Um ponto que atravessou para a frente volta para as costas.
+const SCARF_M = 0.2, scLoc = new THREE.Vector3(), scOld = new THREE.Vector3();
+function scarfCollide(p, prev) {
+  body.worldToLocal(scLoc.copy(p));
+  scOld.copy(scLoc);
+  const y = scLoc.y;
+  if (y > 0.2 && y < 2.25) {
+    const tt = clamp((y - 0.3) / 1.86, 0, 1);
+    const rr = (0.3 + 0.66 * Math.pow(1 - tt, 1.25)) * 1.07 + SCARF_M;
+    let r = Math.hypot(scLoc.x, scLoc.z);
+    if (r < rr) {
+      if (scLoc.z < 0) scLoc.z = -scLoc.z;
+      if (r < 1e-3) { scLoc.x = 0; scLoc.z = 1; r = 1; }
+      scLoc.x *= rr / r; scLoc.z *= rr / r;
+    }
+  }
+  for (const [cy, cz, cr] of SCARF_HEAD) {
+    const dy = scLoc.y - cy, dz = scLoc.z - cz, d = Math.hypot(scLoc.x, dy, dz), rr = cr + 0.12;
+    if (d < rr) {
+      if (d < 1e-3) { scLoc.z = cz + rr; continue; }
+      scLoc.x *= rr / d; scLoc.y = cy + dy * rr / d; scLoc.z = cz + dz * rr / d;
+    }
+  }
+  if (scLoc.equals(scOld)) return;
+  body.localToWorld(scLoc);
+  prev.add(tv3.subVectors(scLoc, p));
+  p.copy(scLoc);
+}
+const SCARF_HEAD = [[2.36, 0, 0.54], [2.95, 0.2, 0.3]];
 function updatePlayerVisual(dt, t) {
   playerG.position.copy(P.p);
   const hs = Math.hypot(P.v.x, P.v.z);
@@ -1258,7 +1323,7 @@ function updatePlayerVisual(dt, t) {
     armR.rotation.set(Math.atan2(-tv.z, -tv.y), 0, Math.asin(clamp(tv.x, -1, 1)));
     pose.aRx = armR.rotation.x; pose.aRz = armR.rotation.z;
   } else armR.rotation.set(pose.aRx, 0, pose.aRz + 0.24);
-  hoodMat.color.setHSL((0.92 + Math.sin(t * 0.7) * 0.04) % 1, 1, P.invuln > 0 && Math.floor(t * 14) % 2 ? 0.95 : 0.66);
+  hoodMat.color.setHSL(0.012 + Math.sin(t * 0.7) * 0.006, 0.62, P.invuln > 0 && Math.floor(t * 14) % 2 ? 0.85 : 0.38);
   eyeGlow.color.setRGB(1, P.invuln > 0 ? 0.3 : 1, P.invuln > 0 ? 0.3 : 1);
   playerG.updateMatrixWorld(true);
   armR.localToWorld(handWorld.copy(HAND_LOCAL));
@@ -1293,7 +1358,7 @@ function updatePlayerVisual(dt, t) {
   // cachecol
   const count = 8 + Math.floor((P.imp / 100) * (SC_MAX - 8));
   const ang = playerG.rotation.y;
-  body.localToWorld(tv2.set(0, 2.08, 0.3));
+  body.localToWorld(tv2.set(0, 2.0, 0.44));
   scarfPts[0].copy(tv2); scarfPrev[0].copy(tv2);
   const sdt = Math.min(dt, 1 / 30);
   if (!scarfInit) { for (let i = 0; i < SC_MAX; i++) { scarfPts[i].set(tv2.x, tv2.y, tv2.z + i * SEG * 0.3); scarfPrev[i].copy(scarfPts[i]); } scarfInit = true; }
@@ -1305,12 +1370,15 @@ function updatePlayerVisual(dt, t) {
     const fl = Math.sin(t * 8 - i * 0.55) * 0.05 * wind;
     a.x += vx + fl * Math.cos(ang); a.y += vy + (lerp(-7, 1.5, clamp(Math.hypot(P.v.x, P.v.z) / 25, 0, 1)) - i * 0.12) * sdt * sdt + Math.cos(t * 6.3 - i * 0.4) * 0.025 * wind; a.z += vz - fl * Math.sin(ang);
   }
-  for (let i = 1; i < SC_MAX; i++) {
-    const a = scarfPts[i - 1], b = scarfPts[i];
-    tv.subVectors(b, a); const l = tv.length() || 1e-4;
-    const corr = 1 - SEG / l;
-    b.addScaledVector(tv, -corr);
-    scarfPrev[i].addScaledVector(tv, -corr * 0.9);
+  for (let it = 0; it < 2; it++) {
+    for (let i = 1; i < SC_MAX; i++) {
+      const a = scarfPts[i - 1], b = scarfPts[i];
+      tv.subVectors(b, a); const l = tv.length() || 1e-4;
+      const corr = 1 - SEG / l;
+      b.addScaledVector(tv, -corr);
+      scarfPrev[i].addScaledVector(tv, -corr * 0.9);
+    }
+    for (let i = 2; i < SC_MAX; i++) scarfCollide(scarfPts[i], scarfPrev[i]);
   }
   for (let i = 1; i < SC_MAX; i++) {
     const gh2 = height(scarfPts[i].x, scarfPts[i].z) + 0.1;
@@ -1333,18 +1401,20 @@ function updatePlayerVisual(dt, t) {
 // ---------------------------------------------------------------------------
 // Cores do céu e do mundo, que mudam com a região e com o tempo
 // ---------------------------------------------------------------------------
-function pal(t, a, b, c, d, out) {
-  out.setRGB(
-    clamp(a[0] + b[0] * Math.cos(6.28318 * (c[0] * t + d[0])), 0, 1),
-    clamp(a[1] + b[1] * Math.cos(6.28318 * (c[1] * t + d[1])), 0, 1),
-    clamp(a[2] + b[2] * Math.cos(6.28318 * (c[2] * t + d[2])), 0, 1));
-  return out;
+// Cantos [frio seco, frio úmido, quente seco, quente úmido], misturados em dois eixos.
+const SKY_TOP = [[0.42, 0.56, 0.72], [0.52, 0.6, 0.7], [0.24, 0.46, 0.76], [0.44, 0.6, 0.76]];
+const SKY_HOR = [[0.82, 0.85, 0.88], [0.84, 0.87, 0.9], [0.9, 0.82, 0.68], [0.84, 0.87, 0.84]];
+function biomeMix(wT, wM, c, out) {
+  const k = (i) => lerp(lerp(c[0][i], c[1][i], wM), lerp(c[2][i], c[3][i], wM), wT);
+  return out.setRGB(k(0), k(1), k(2));
 }
 function updateAtmos(t) {
-  const bio = biomeAt(P.p.x, P.p.z, t);
-  const T = t * 0.006 + bio * 0.45;
-  pal(T, [0.5, 0.55, 0.78], [0.35, 0.32, 0.22], [1, 1, 1], [0.0, 0.25, 0.5], skyU.uTop.value);
-  pal(T + 0.12, [0.86, 0.74, 0.74], [0.14, 0.22, 0.22], [1, 1, 1], [0.0, 0.33, 0.67], skyU.uHor.value);
+  // Céu de verdade para cada clima: azul fundo e horizonte empoeirado no
+  // deserto, branco úmido sobre a mata, cinza-azulado e frio na tundra.
+  const [T, M] = climateAt(P.p.x, P.p.z, t);
+  const wT = smooth(0.3, 0.7, T), wM = smooth(0.3, 0.7, M);
+  biomeMix(wT, wM, SKY_TOP, skyU.uTop.value);
+  biomeMix(wT, wM, SKY_HOR, skyU.uHor.value);
   terrU.uFog.value.copy(skyU.uHor.value);
   scene.fog.color.copy(skyU.uHor.value);
   const sa = t * 0.012 + 0.8;
@@ -1372,7 +1442,7 @@ if (document.fonts) {
     .map((f) => document.fonts.load(f).catch(() => null))).then(() => { uiDirty = true; signJump.userData.draw(); signShift.userData.draw(); });
 }
 const TXT = {
-  lead: 'Uma ilha solta no céu, e embaixo um deserto sem fim que se refaz enquanto você atravessa. Corra pelas dunas, se pendure nos olhos que flutuam no céu e derrube as bocas que tentam te frear. Cada boca que cai te deixa mais rápido.',
+  lead: 'Uma ilha solta no céu, e embaixo uma terra sem fim que se refaz enquanto você atravessa: dunas, savanas, matas, estepes, tundra e neve. Corra pelas encostas, se pendure nos olhos que flutuam no céu e derrube as bocas que tentam te frear. Cada boca que cai te deixa mais rápido.',
   keys: [
     ['Mouse', 'Mira. Leve o ponteiro para os lados para virar a câmera.'],
     ['W A S D', 'Andar'],
